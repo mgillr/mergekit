@@ -224,6 +224,7 @@ class OPTDetector:
         "self_attn.out_proj.weight": ("attn_o", "weight"),
         "self_attn.out_proj.bias": ("attn_o", "bias"),
         "final_layer_norm.weight": ("pre_ffn_norm", "weight"),  # per-layer fc norm name in OPT
+        "final_layer_norm.bias": ("pre_ffn_norm", "bias"),
         "fc1.weight": ("ffn_up", "weight"),
         "fc1.bias": ("ffn_up", "bias"),
         "fc2.weight": ("ffn_down", "weight"),

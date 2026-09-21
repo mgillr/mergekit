@@ -122,6 +122,14 @@ def test_opt_detect_and_map():
     ]
     assert out["layer_2.ffn_up.weight"] is sd["model.decoder.layers.2.fc1.weight"]
     assert out["final_norm.weight"] is sd["model.decoder.final_layer_norm.weight"]
+
+def test_opt_maps_ffn_norm_bias():
+    # regression: Bugbot finding — per-layer FFN LayerNorm bias was dropped
+    sd = {"model.decoder.layers.0.final_layer_norm.bias": object()}
+    out = _canon.OPTDetector().canonicalize(sd)
+    assert out["layer_0.pre_ffn_norm.bias"] is sd[
+        "model.decoder.layers.0.final_layer_norm.bias"
+    ]
     assert all(is_canonical(k) for k in out)
 
 
