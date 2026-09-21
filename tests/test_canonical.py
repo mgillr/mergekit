@@ -6,6 +6,7 @@ try:
         is_canonical,
         layer_key,
     )
+    import mergekit.architecture.canonical as _canon  # noqa: F401
 except ImportError:  # torch not installed: load the module standalone
     import importlib.util
     from pathlib import Path
