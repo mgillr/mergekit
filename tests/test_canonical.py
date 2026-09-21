@@ -19,6 +19,7 @@ except ImportError:  # torch not installed: load the module standalone
     LlamaFamilyDetector = _mod.LlamaFamilyDetector
     is_canonical = _mod.is_canonical
     layer_key = _mod.layer_key
+    _canon = _mod
 
 
 @pytest.fixture
@@ -86,3 +87,45 @@ def test_layer_key_shape():
     assert is_canonical("layer_3.ffn_down.weight")
     assert not is_canonical("layer_3.not_a_role.weight")
     assert not is_canonical("model.layers.3.mlp.down_proj.weight")
+
+
+def test_bert_detect_and_map():
+    sd = {
+        "bert.embeddings.word_embeddings.weight": object(),
+        "bert.encoder.layer.0.attention.self.query.weight": object(),
+        "bert.encoder.layer.0.attention.output.LayerNorm.weight": object(),
+        "bert.encoder.layer.1.output.dense.bias": object(),
+    }
+    assert _canon.BertFamilyDetector().detect(sd)
+    out = _canon.BertFamilyDetector().canonicalize(sd)
+    assert out["layer_0.attn_q.weight"] is sd[
+        "bert.encoder.layer.0.attention.self.query.weight"
+    ]
+    assert out["layer_0.post_attn_norm.weight"] is sd[
+        "bert.encoder.layer.0.attention.output.LayerNorm.weight"
+    ]
+    assert out["layer_1.ffn_down.bias"] is sd["bert.encoder.layer.1.output.dense.bias"]
+    assert all(is_canonical(k) for k in out)
+
+
+def test_opt_detect_and_map():
+    sd = {
+        "model.decoder.embed_tokens.weight": object(),
+        "model.decoder.layers.0.self_attn.q_proj.weight": object(),
+        "model.decoder.layers.2.fc1.weight": object(),
+        "model.decoder.final_layer_norm.weight": object(),
+    }
+    assert _canon.OPTDetector().detect(sd)
+    out = _canon.OPTDetector().canonicalize(sd)
+    assert out["layer_0.attn_q.weight"] is sd[
+        "model.decoder.layers.0.self_attn.q_proj.weight"
+    ]
+    assert out["layer_2.ffn_up.weight"] is sd["model.decoder.layers.2.fc1.weight"]
+    assert out["final_norm.weight"] is sd["model.decoder.final_layer_norm.weight"]
+    assert all(is_canonical(k) for k in out)
+
+
+def test_cross_detector_exclusivity():
+    llama = {"model.layers.0.self_attn.q_proj.weight": object()}
+    assert not _canon.OPTDetector().detect(llama)
+    assert not _canon.BertFamilyDetector().detect(llama)

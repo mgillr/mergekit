@@ -39,9 +39,18 @@ DECODER_ROLES = (
     "ffn_gate",
     "ffn_up",
     "ffn_down",
+    "post_attn_norm",
+    "post_ffn_norm",
 )
 
-GLOBAL_KEYS = ("embed_tokens.weight", "final_norm.weight", "head_lm.weight")
+GLOBAL_KEYS = (
+    "embed_tokens.weight",
+    "embed_positions.weight",
+    "final_norm.weight",
+    "final_norm.bias",
+    "head_lm.weight",
+    "head_lm.bias",
+)
 
 _LAYER_RE = re.compile(r"^layer_(\d+)\.([a-z_]+)\.(weight|bias)$")
 
@@ -141,4 +150,110 @@ class LlamaFamilyDetector:
                 out[
                     f"model.layers.{m.group(1)}.{rev_tail[(m.group(2), m.group(3))]}"
                 ] = value
+        return out
+
+
+class BertFamilyDetector:
+    """BERT / RoBERTa encoder layout (post-norm; DistilBERT excluded).
+
+    Post-norm LayerNorms map onto the post_attn_norm / post_ffn_norm
+    slots so comparison within a BERT set is consistent.
+    """
+
+    name = "bert"
+    family = "bert"
+
+    _layer_re = re.compile(r"^(?:bert|roberta)\.encoder\.layer\.(\d+)\.(.+)$")
+
+    _TAIL = {
+        "attention.self.query.weight": ("attn_q", "weight"),
+        "attention.self.query.bias": ("attn_q", "bias"),
+        "attention.self.key.weight": ("attn_k", "weight"),
+        "attention.self.key.bias": ("attn_k", "bias"),
+        "attention.self.value.weight": ("attn_v", "weight"),
+        "attention.self.value.bias": ("attn_v", "bias"),
+        "attention.output.dense.weight": ("attn_o", "weight"),
+        "attention.output.dense.bias": ("attn_o", "bias"),
+        "attention.output.LayerNorm.weight": ("post_attn_norm", "weight"),
+        "attention.output.LayerNorm.bias": ("post_attn_norm", "bias"),
+        "intermediate.dense.weight": ("ffn_up", "weight"),
+        "intermediate.dense.bias": ("ffn_up", "bias"),
+        "output.dense.weight": ("ffn_down", "weight"),
+        "output.dense.bias": ("ffn_down", "bias"),
+        "output.LayerNorm.weight": ("post_ffn_norm", "weight"),
+        "output.LayerNorm.bias": ("post_ffn_norm", "bias"),
+    }
+
+    def detect(self, state_dict: Mapping[str, Any]) -> bool:
+        return any(
+            k.startswith(("bert.", "roberta.")) for k in state_dict
+        ) and any(".attention.self.query." in k for k in state_dict)
+
+    def canonicalize(self, state_dict: Mapping[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for key, value in state_dict.items():
+            if key.endswith("embeddings.word_embeddings.weight"):
+                out["embed_tokens.weight"] = value
+                continue
+            m = self._layer_re.match(key)
+            if m is None:
+                continue
+            tail = self._TAIL.get(m.group(2))
+            if tail is not None:
+                out[layer_key(int(m.group(1)), tail[0], tail[1])] = value
+        return out
+
+
+class OPTDetector:
+    """OPT decoder layout: ``model.decoder.layers.N.*``."""
+
+    name = "opt"
+    family = "opt"
+
+    _layer_re = re.compile(r"^model\.decoder\.layers\.(\d+)\.(.+)$")
+
+    _TAIL = {
+        "self_attn_layer_norm.weight": ("pre_attn_norm", "weight"),
+        "self_attn_layer_norm.bias": ("pre_attn_norm", "bias"),
+        "self_attn.q_proj.weight": ("attn_q", "weight"),
+        "self_attn.q_proj.bias": ("attn_q", "bias"),
+        "self_attn.k_proj.weight": ("attn_k", "weight"),
+        "self_attn.k_proj.bias": ("attn_k", "bias"),
+        "self_attn.v_proj.weight": ("attn_v", "weight"),
+        "self_attn.v_proj.bias": ("attn_v", "bias"),
+        "self_attn.out_proj.weight": ("attn_o", "weight"),
+        "self_attn.out_proj.bias": ("attn_o", "bias"),
+        "final_layer_norm.weight": ("pre_ffn_norm", "weight"),  # per-layer fc norm name in OPT
+        "fc1.weight": ("ffn_up", "weight"),
+        "fc1.bias": ("ffn_up", "bias"),
+        "fc2.weight": ("ffn_down", "weight"),
+        "fc2.bias": ("ffn_down", "bias"),
+    }
+
+    _GLOBALS = {
+        "model.decoder.embed_tokens.weight": "embed_tokens.weight",
+        "model.decoder.embed_positions.weight": "embed_positions.weight",
+        "model.decoder.final_layer_norm.weight": "final_norm.weight",
+        "model.decoder.final_layer_norm.bias": "final_norm.bias",
+        "lm_head.weight": "head_lm.weight",
+    }
+
+    def detect(self, state_dict: Mapping[str, Any]) -> bool:
+        return any(
+            k.startswith("model.decoder.layers.") for k in state_dict
+        ) and any(".self_attn.q_proj." in k for k in state_dict)
+
+    def canonicalize(self, state_dict: Mapping[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for key, value in state_dict.items():
+            g = self._GLOBALS.get(key)
+            if g is not None:
+                out[g] = value
+                continue
+            m = self._layer_re.match(key)
+            if m is None:
+                continue
+            tail = self._TAIL.get(m.group(2))
+            if tail is not None:
+                out[layer_key(int(m.group(1)), tail[0], tail[1])] = value
         return out
